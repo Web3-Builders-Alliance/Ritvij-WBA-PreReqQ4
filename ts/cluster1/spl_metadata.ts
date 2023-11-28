@@ -1,24 +1,30 @@
-import {
-  Commitment,
-  Connection,
-  Keypair,
-  PublicKey,
-  Transaction,
-  sendAndConfirmTransaction,
-} from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import wallet from "../wba-wallet.json";
+import { createUmi } from "@metaplex-foundation/umi-bundle-defaults";
+import { createMetadataAccountV3 } from "@metaplex-foundation/mpl-token-metadata";
+import {
+  createSignerFromKeypair,
+  publicKey,
+  signerIdentity,
+} from "@metaplex-foundation/umi";
 import base58 from "bs58";
 
-// We're going to import our keypair from the wallet file
+//Create a Solana devnet UMI connection
+const umi = createUmi("https://api.devnet.solana.com");
+
+// We're going to import our keypair from the wallet file using umi EdDSA interface
 const bs = base58.decode(wallet);
-const keypair = Keypair.fromSecretKey(new Uint8Array(bs));
+let keypair = umi.eddsa.createKeypairFromSecretKey(new Uint8Array(bs));
 
-//Create a Solana devnet connection
-const commitment: Commitment = "confirmed";
-const connection = new Connection("https://api.devnet.solana.com", commitment);
+//Create a KeypairSigner and set Identity and Payer of the signer
+const myKeypairSigner = createSignerFromKeypair(umi, keypair);
+umi.use(signerIdentity(myKeypairSigner));
 
-// Define our Mint address
-const mint = new PublicKey("<mint address>");
+// Define our Mint address ("Standard Way")
+// To define it using UMI pubKey method, it can be created as:
+// const mint = publicKey("<MintAddress>")
+// and them mint can be used directly in the createMetadataAccountV3 method without needing the toString() method
+const mint = new PublicKey("<MintAddress>");
 
 // Add the Token Metadata Program
 const token_metadata_program_id = new PublicKey(
@@ -26,6 +32,13 @@ const token_metadata_program_id = new PublicKey(
 );
 
 // Create PDA for token metadata
+// Again, if the "Standard Method is not desired, the PDA can be created by serializing the seeds as Uint8array as:"
+// const seeds =
+//   [string({ size: 'variable' }).serialize('metadata'),
+//   publicKeySerializer().serialize(tokenMetadataProgramId),
+//   publicKeySerializer().serialize(mint),
+// ];
+// const metadata_pda = umi.eddsa.findPda(tokenMetadataProgramId, seeds);
 const metadata_seeds = [
   Buffer.from("metadata"),
   token_metadata_program_id.toBuffer(),
@@ -38,7 +51,29 @@ const [metadata_pda, _bump] = PublicKey.findProgramAddressSync(
 
 (async () => {
   try {
-    // Start here
+    let myTransaction = createMetadataAccountV3(umi, {
+      //accounts
+      metadata: publicKey(metadata_pda.toString()),
+      mint: publicKey(mint.toString()),
+      mintAuthority: myKeypairSigner,
+      payer: myKeypairSigner,
+      updateAuthority: keypair.publicKey,
+      data: {
+        name: "TokenName",
+        symbol: "TokenSymbol",
+        uri: "example_uri.com",
+        sellerFeeBasisPoints: 0,
+        creators: null,
+        collection: null,
+        uses: null,
+      },
+      isMutable: true,
+      collectionDetails: null,
+    });
+
+    let result = await myTransaction.sendAndConfirm(umi);
+
+    console.log(result.signature);
   } catch (e) {
     console.error(`Oops, something went wrong: ${e}`);
   }
